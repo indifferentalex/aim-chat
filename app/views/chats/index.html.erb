@@ -1,0 +1,182 @@
+<div class="absolute top-0 left-0 p-6 border-r border-b border-black">
+    <div><%= @chat.id %></div>
+    <div id="chat-metadata" class="whitespace-pre-wrap"></div>
+    <div>
+        <label for="show-function-messages">Show function calls/execs:</label>
+        <input type="checkbox" name="show-function-messages" id="show-function-messages" />
+    </div>
+</div>
+
+<style type="text/tailwindcss">
+    @layer components {
+        .message {
+            @apply bg-white rounded-xl border border-gray-300 p-3;
+        }
+
+        .message.function {
+            @apply w-full bg-gray-100 border-gray-300;
+        }
+
+        #messages-container.hide-function-messages .message.function {
+            @apply hidden;
+        }
+    }
+</style>
+
+<div class="flex justify-center">
+    <div id="messages-container" class="hide-function-messages h-screen w-5/12 flex flex-col justify-end">
+        <div id="messages" class="overflow-scroll pt-12 flex-1 flex flex-col gap-6"></div>
+
+        <form class="pt-6">
+            <div>
+                <input id="message-input" type="text" class="border border-gray-700 rounded-lg p-2 mb-3 w-full" />
+            </div>
+
+            <div class="flex justify-between items-center pb-12">
+                <div></div>
+                <div class="flex">
+                    <a href="?new_session=true" class="bg-gray-500 hover:bg-gray-700 text-white flex justify-center items-center h-12 font-bold py-2 px-4 rounded-lg mr-3">
+                        New session
+                    </a>
+
+                    <button id="send-button" class="bg-blue-500 hover:bg-blue-700 text-white flex justify-center items-center h-12 font-bold py-2 px-4 rounded-lg">
+                        Send
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    let showTimestamps = false;
+    let latestMessages = [];
+
+    const loadMessages = (messages) => {
+        const messagesContainer = document.querySelector("#messages");
+        messagesContainer.innerHTML = "";
+
+        messages.forEach((message, i) => {
+            const messageElement = document.createElement("div");
+
+            messageElement.classList.add("message", "group", "whitespace-pre-wrap", "relative");
+
+            if (message.role == "function" || message.function_call) {
+                messageElement.classList.add("function");
+            }
+
+            if (message.role == "user") {
+                messageElement.classList.add("bg-green-100", "border-green-300", "self-end");
+            } else {
+                messageElement.classList.add("bg-white", "border-gray-300", "self-start");
+            }
+
+            // Consider that only the last X will be used as chat context, so "gray out" the rest
+            if (i < messages.length - <%= Chat::MESSAGES_CONTEXT_LENGTH %>) {
+                messageElement.classList.add("opacity-50");
+            }
+
+            if (message.role == "function" || message.function_call) {
+                if (message.role == "function") {
+                    messageElement.innerHTML = message.content;
+                } else {
+                    let functionCallArguments = null;
+
+                    try {
+                        functionCallArguments = JSON.parse(message.function_call.arguments);
+                    } catch (e) {
+                        // ChatGPT ended up generating invalid JSON, this can happen
+                    }
+
+                    messageElement.innerHTML = `Calling <b class="font-bold">${message.function_call.name}</b> with parameters <b class="font-bold">${functionCallArguments ? JSON.stringify(functionCallArguments, null, 2) : "JSON parsing error"}</b>`;
+                }
+            } else {
+                messageElement.innerHTML = message.content;
+            }
+
+            messagesContainer.appendChild(messageElement);
+        });
+
+        setTimeout(
+            () => {
+                messagesContainer.lastChild &&
+                    messagesContainer.lastChild.scrollIntoView({ behavior: "smooth", block: "end" });
+            },
+            10,
+        )
+    }
+
+    const processResponse = (data) => {
+        latestMessages = data.messages;
+        loadMessages(latestMessages);
+
+        document.getElementById("chat-metadata").innerHTML =
+            JSON.stringify(data.metadata, null, 2);
+    }
+
+    document.getElementById("send-button").addEventListener("click", function(e) {
+        e.preventDefault();
+
+        if (document.getElementById("send-button").disabled == true ||
+            document.getElementById("message-input").value == "") {
+            return;
+        }
+
+        const message = document.getElementById("message-input").value;
+        document.getElementById("message-input").disabled = true;
+        document.getElementById("message-input").value = "";
+
+        loadMessages([
+            ...latestMessages,
+            {
+                id: null, // Not saved in the BE yet
+                content: message,
+                role: "user",
+            },
+        ]);
+
+        document.getElementById("send-button").disabled = true;
+        document.getElementById("send-button").innerHTML = "<svg class='animate-spin h-5 w-5 text-white' xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24'><path class='opacity-90' fill='#ffffff' d='M4 12a8 8 0 018-8v1a7 7 0 00-7 7 7 7 0 007 7v1a8 8 0 01-8-8z'></path></svg>";
+
+        // Send the message
+        fetch("/chat/<%= @chat.id %>", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-CSRF-Token": document.querySelector("meta[name=csrf-token]").content
+            },
+            body: JSON.stringify({
+                message: message,
+            }),
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                alert(data.error);
+            } else {
+                processResponse(data);
+
+                document.getElementById("message-input").disabled = false;
+                document.getElementById("send-button").disabled = false;
+                document.getElementById("send-button").innerHTML = "Send";
+            }
+        });
+    });
+
+    // On load, we fetch the messages for the current chat
+    fetch("/chats/<%= @chat.id %>")
+        .then(response => response.json())
+        .then(data => {
+            processResponse(data);
+        });
+
+    document.getElementById("show-function-messages").addEventListener("change", function(e) {
+        const messagesContainer = document.getElementById("messages-container");
+
+        if (e.target.checked) {
+            messagesContainer.classList.remove("hide-function-messages");
+        } else {
+            messagesContainer.classList.add("hide-function-messages");
+        }
+    });
+</script>
