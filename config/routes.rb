@@ -6,4 +6,8 @@ Rails.application.routes.draw do
   get "/chats/:id", to: "chats#show"
   post "/chat/:chat_id", to: "chats#process_message"
 
+  # Waterworld
+  get "/waterworld", to: "waterworld#index"
+  post "/waterworld/:chat_id", to: "waterworld#process_message"
+
 end
